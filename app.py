@@ -30,14 +30,31 @@ with st.sidebar:
     start_date = st.date_input("Start date", value=date(2020, 1, 1))
     end_date = st.date_input("End date", value=date.today())
     frequency = st.selectbox("Frequency", options=["1d", "1wk"], index=0)
+    status_placeholder = st.empty()
 
 if not selected_tickers:
     st.info("Select at least one ticker to begin.")
     st.stop()
 
-prices = get_price_history(
-    selected_tickers, start=pd.to_datetime(start_date), end=pd.to_datetime(end_date), interval=frequency
-)
+status_rows = []
+try:
+    prices, prices_fetched_at, prices_cached = get_price_history(
+        selected_tickers,
+        start=pd.to_datetime(start_date),
+        end=pd.to_datetime(end_date),
+        interval=frequency,
+    )
+    status_rows.append(
+        {
+            "dataset": "Prices",
+            "last_refresh": prices_fetched_at,
+            "cached": "Yes" if prices_cached else "No",
+        }
+    )
+except Exception as exc:
+    prices = pd.DataFrame()
+    st.warning(f"Price data could not be loaded: {exc}")
+    status_rows.append({"dataset": "Prices", "last_refresh": "NA", "cached": "NA"})
 
 market_tab, fundamentals_tab, financials_tab, news_tab = st.tabs(
     ["Market", "Fundamentals", "Financials", "News"]
@@ -73,8 +90,21 @@ with market_tab:
 
 with fundamentals_tab:
     st.subheader("Fundamentals")
-    info = get_company_info(selected_tickers)
-    if info.empty:
+    try:
+        info, info_fetched_at, info_cached = get_company_info(selected_tickers)
+        status_rows.append(
+            {
+                "dataset": "Fundamentals",
+                "last_refresh": info_fetched_at,
+                "cached": "Yes" if info_cached else "No",
+            }
+        )
+    except Exception as exc:
+        info = {}
+        st.warning(f"Fundamental data could not be loaded: {exc}")
+        status_rows.append({"dataset": "Fundamentals", "last_refresh": "NA", "cached": "NA"})
+
+    if not info:
         st.warning("Fundamental data is unavailable.")
     else:
         fields = [
@@ -88,7 +118,11 @@ with fundamentals_tab:
             "profitMargins",
             "returnOnEquity",
         ]
-        display_info = info.reindex(columns=fields)
+        rows = []
+        for ticker in selected_tickers:
+            info_dict = info.get(ticker, {})
+            rows.append({"ticker": ticker, **{field: info_dict.get(field, "NA") for field in fields}})
+        display_info = pd.DataFrame(rows).set_index("ticker")
         display_info = display_info.rename(
             columns={
                 "longName": "Company",
@@ -104,7 +138,19 @@ with fundamentals_tab:
 
 with financials_tab:
     st.subheader("Financial Statements")
-    financials = get_financials(selected_tickers)
+    try:
+        financials, financials_fetched_at, financials_cached = get_financials(selected_tickers)
+        status_rows.append(
+            {
+                "dataset": "Financials",
+                "last_refresh": financials_fetched_at,
+                "cached": "Yes" if financials_cached else "No",
+            }
+        )
+    except Exception as exc:
+        financials = {}
+        st.warning(f"Financial statement data could not be loaded: {exc}")
+        status_rows.append({"dataset": "Financials", "last_refresh": "NA", "cached": "NA"})
 
     def extract_line_item(statements, label):
         frames = {}
@@ -164,7 +210,19 @@ with financials_tab:
 
 with news_tab:
     st.subheader("Latest News")
-    news_items = get_news(selected_tickers)
+    try:
+        news_items, news_fetched_at, news_cached = get_news(selected_tickers)
+        status_rows.append(
+            {
+                "dataset": "News",
+                "last_refresh": news_fetched_at,
+                "cached": "Yes" if news_cached else "No",
+            }
+        )
+    except Exception as exc:
+        news_items = {}
+        st.warning(f"News data could not be loaded: {exc}")
+        status_rows.append({"dataset": "News", "last_refresh": "NA", "cached": "NA"})
     has_news = False
     for ticker, items in news_items.items():
         if not items:
@@ -181,3 +239,9 @@ with news_tab:
                 st.markdown(f"- {title} ({publisher})")
     if not has_news:
         st.info("News is not available. You can add a custom provider later if needed.")
+
+status_df = pd.DataFrame(status_rows)
+if not status_df.empty:
+    status_df = status_df.drop_duplicates(subset=["dataset"], keep="last")
+    status_placeholder.markdown("**Data Status**")
+    status_placeholder.dataframe(status_df, use_container_width=True, hide_index=True)
